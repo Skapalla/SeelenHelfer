@@ -3,7 +3,17 @@ local addonName, ns = ...
 -- =========================================================================
 -- INTERNE VERSIONSNUMMER
 -- =========================================================================
-local internalVersion = "1.3 Frühlingshase"
+local internalVersion = "1.4 Frühlingshasen"
+
+-- =========================================================================
+-- WAS IST NEU? (CHANGELOG)
+-- Hier kannst du für jedes Update einfach neue Zeilen hinzufügen oder ändern
+-- =========================================================================
+local changelogNotes = {
+    "|cff00ff00Neu:|r Das Addon erkennt nun Items die du schon Besitzt hast und blendet diese auf Wunsch aus (Kann in den Optionen aktiviert oder deaktiviert werden).",
+    "|cff00ff00Neu:|r Das Addon erkennt nun Items die du schon Besitzt hast und markiert diese mit einem Haken (Kann in den Optionen aktiviert oder deaktiviert werden).",
+    "|cff00ff00Neu:|r Eine Warnung hinzugefügt, wenn man seine nicht aktive Skillung betrachtet."   
+}
 
 -- =========================================================================
 -- AUSNAHMEN: DIESE ITEMS ALS "CHAMPION" ANZEIGEN (ID = true)
@@ -23,7 +33,36 @@ local UpdateList
 local TriggerUpdate
 
 -- =========================================================================
--- HILFSFUNKTIONEN: DATEN & LOGIK
+-- INVENTAR SCANNER (Besessene Items) - GEFIXT
+-- =========================================================================
+local OwnedItemsCache = {}
+
+local GetBagSlots = C_Container and C_Container.GetContainerNumSlots or GetContainerNumSlots
+local GetBagItemID = C_Container and C_Container.GetContainerItemID or GetContainerItemID
+
+local function ScanPlayerItems()
+    wipe(OwnedItemsCache)
+    
+    -- 1. Angelegte Ausrüstung scannen (Slots 1 bis 19)
+    for i = 1, 19 do
+        local itemID = GetInventoryItemID("player", i)
+        if itemID then OwnedItemsCache[itemID] = true end
+    end
+    
+    -- 2. Taschen scannen (Rucksäcke 0 bis 4)
+    for bag = 0, 4 do
+        local numSlots = GetBagSlots(bag)
+        if numSlots then
+            for slot = 1, numSlots do
+                local itemID = GetBagItemID(bag, slot)
+                if itemID then OwnedItemsCache[itemID] = true end
+            end
+        end
+    end
+end
+
+-- =========================================================================
+-- HILFSFUNKTIONEN: DATEN & LOGIK & UI
 -- =========================================================================
 local function GetDisplayClassAndSpec()
     if SeelenHelferDB and not SeelenHelferDB.autoDetect then
@@ -44,6 +83,16 @@ local function FormatDungeonName(key)
         table.insert(words, (word:gsub("^%l", string.upper)))
     end
     return table.concat(words, " ")
+end
+
+local function CreateModernButton(parent, text, width, height)
+    local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
+    btn:SetSize(width, height)
+    btn:SetBackdrop({ bgFile = "Interface\\ChatFrame\\ChatFrameBackground", edgeFile = "Interface\\ChatFrame\\ChatFrameBackground", edgeSize = 1 })
+    btn:SetBackdropColor(0.2, 0.2, 0.2, 1); btn:SetBackdropBorderColor(0, 0, 0, 1)
+    btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    btn.text:SetPoint("CENTER"); btn.text:SetText(text)
+    return btn
 end
 
 local function GetCurrentDataList()
@@ -179,8 +228,14 @@ OptionsButton:SetSize(22, 22); OptionsButton:SetPoint("RIGHT", CloseButton, "LEF
 OptionsButton:SetNormalTexture("Interface\\GossipFrame\\WorkOrderGossipIcon")
 OptionsButton:SetHighlightTexture("Interface\\GossipFrame\\WorkOrderGossipIcon", "ADD")
 
+-- NEU: Falsche Skillung Warnung (Jetzt mittig und größer)
+MainFrame.wrongSpecWarning = MainFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge") -- 'GameFontNormalLarge' macht den Text deutlich größer
+MainFrame.wrongSpecWarning:SetPoint("TOP", MainFrame, "TOP", 0, -68) -- 'TOP' und X=0 zentrieren den Text horizontal
+MainFrame.wrongSpecWarning:SetText("|cffff0000Achtung: Du betrachtest nicht deine aktuell aktive Skillung!|r")
+MainFrame.wrongSpecWarning:Hide()
+
 MainFrame.statPrioInfo = MainFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-MainFrame.statPrioInfo:SetPoint("TOPLEFT", 15, -73)
+MainFrame.statPrioInfo:SetPoint("TOPLEFT", 15, -85) -- Etwas nach unten verschoben für die Warnung
 MainFrame.specInfo = MainFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 MainFrame.specInfo:SetPoint("BOTTOMLEFT", 15, 12)
 MainFrame.dateInfo = MainFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
@@ -189,16 +244,6 @@ MainFrame.dateInfo:SetPoint("BOTTOMRIGHT", -15, 12)
 -- =========================================================================
 -- 2. TABS & DROPDOWN
 -- =========================================================================
-local function CreateModernButton(parent, text, width, height)
-    local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
-    btn:SetSize(width, height)
-    btn:SetBackdrop({ bgFile = "Interface\\ChatFrame\\ChatFrameBackground", edgeFile = "Interface\\ChatFrame\\ChatFrameBackground", edgeSize = 1 })
-    btn:SetBackdropColor(0.2, 0.2, 0.2, 1); btn:SetBackdropBorderColor(0, 0, 0, 1)
-    btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    btn.text:SetPoint("CENTER"); btn.text:SetText(text)
-    return btn
-end
-
 local btnRaid = CreateModernButton(MainFrame, "Raid", 75, 22); btnRaid:SetPoint("TOPLEFT", 15, -40)
 local btnMythic = CreateModernButton(MainFrame, "Mythic+", 75, 22); btnMythic:SetPoint("LEFT", btnRaid, "RIGHT", 5, 0)
 local btnClassSpec = CreateModernButton(MainFrame, "Klasse / Spec", 120, 22); btnClassSpec:SetPoint("TOPRIGHT", -15, -40)
@@ -235,7 +280,7 @@ btnTabTalents:SetScript("OnClick", function() selectedTab = "Talents"; TriggerUp
 btnTabEnchants:SetScript("OnClick", function() selectedTab = "Enchants"; TriggerUpdate() end)
 
 local ScrollFrame = CreateFrame("ScrollFrame", "SeelenHelfer_ScrollFrame", MainFrame, "UIPanelScrollFrameTemplate")
-ScrollFrame:SetPoint("TOPLEFT", 10, -95); ScrollFrame:SetPoint("BOTTOMRIGHT", -30, 65)
+ScrollFrame:SetPoint("TOPLEFT", 10, -105); ScrollFrame:SetPoint("BOTTOMRIGHT", -30, 65)
 
 if ScrollFrame.ScrollBar then
     ScrollFrame.ScrollBar:Hide(); ScrollFrame.ScrollBar:ClearAllPoints()
@@ -283,10 +328,30 @@ UpdateList = function()
         _, sName = GetSpecializationInfoByID(sID)
     end
     
+    -- Aktive Skillung auslesen um sie mit der betrachteten abzugleichen
+    local _, _, actualClassID = UnitClass("player")
+    local actualSpecID = GetSpecializationInfo and GetSpecializationInfo(GetSpecialization() or 1)
+    
+    if cID ~= actualClassID or sID ~= actualSpecID then
+        MainFrame.wrongSpecWarning:Show()
+    else
+        MainFrame.wrongSpecWarning:Hide()
+    end
+    
     MainFrame.specInfo:SetText(SeelenHelferDB.autoDetect and "|cffffd700Aktuell: " .. (sName or "") .. "|r" or "|cff00ff00Manuell: " .. (sName or "") .. "|r")
     MainFrame.dateInfo:SetText("Stand: " .. (ArchonBiS_Date or "Unbekannt"))
 
-    local dataList = GetCurrentDataList()
+    local rawDataList = GetCurrentDataList()
+    local dataList = {}
+    
+    -- Filter Logik: Besessene Items verstecken
+    for _, itemData in ipairs(rawDataList) do
+        local iID = tonumber(itemData.id)
+        local isOwned = iID and OwnedItemsCache[iID]
+        if not (selectedTab == "Gear" and isOwned and SeelenHelferDB.hideOwnedItems) then
+            table.insert(dataList, itemData)
+        end
+    end
     
     if selectedTab == "Gear" then
         local st = "Keine Daten"
@@ -321,7 +386,11 @@ UpdateList = function()
     if #dataList == 0 then
         local msg = ContentFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         msg:SetPoint("TOP", ContentFrame, "TOP", 0, -20)
-        msg:SetText("Noch keine Daten für diesen Bereich vorhanden.\n")
+        if selectedTab == "Gear" and #rawDataList > 0 and SeelenHelferDB.hideOwnedItems then
+            msg:SetText("|cff00ff00Herzlichen Glückwunsch! Du hast bereits alle BiS-Items!|r\n")
+        else
+            msg:SetText("Noch keine Daten für diesen Bereich vorhanden.\n")
+        end
         msg:Show(); table.insert(ContentFrame.lines, msg)
         yO = -100
     else
@@ -357,9 +426,18 @@ UpdateList = function()
                     end
                     
                     local icon = line:CreateTexture(nil, "ARTWORK"); icon:SetSize(34, 34); icon:SetPoint("LEFT", 5, 0); icon:SetTexture(iT or 134400)
-                    if selectedTab == "Gear" then
-                        local bI = line:CreateTexture(nil, "OVERLAY"); bI:SetSize(14, 14); bI:SetPoint("TOPRIGHT", icon, 4, 4); bI:SetTexture("Interface\\AddOns\\SeelenHelfer\\bis")
+                    
+                    -- BiS Star & Checkmark
+                    if selectedTab == "Gear" then                        
+                        
+                        if iID and OwnedItemsCache[iID] and SeelenHelferDB.showOwnedCheckmark then
+                            local check = line:CreateTexture(nil, "OVERLAY")
+                            check:SetSize(22, 22)
+                            check:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 6, -6)
+                            check:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+                        end
                     end
+                    
                     local t1 = line:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); t1:SetPoint("TOPLEFT", icon, "TOPRIGHT", 10, -2); t1:SetTextColor(0.6, 0.6, 0.6); t1:SetText(itemData.slot or "Slot")
                     local t2 = line:CreateFontString(nil, "OVERLAY", "GameFontNormal"); t2:SetPoint("BOTTOMLEFT", icon, "BOTTOMRIGHT", 10, 2); t2:SetText(iL or itemData.name or "Lade...")
                     
@@ -416,7 +494,7 @@ UpdateList = function()
         ResizeHandle:Show()
         if SeelenHelferDB.customHeight then MainFrame:SetHeight(SeelenHelferDB.customHeight) end
     else
-        local tH = 185 + listH
+        local tH = 195 + listH
         local point, relativeTo, relativePoint, xOfs, yOfs = MainFrame:GetPoint(1)
         if point then
             MainFrame:ClearAllPoints()
@@ -517,10 +595,67 @@ Mini:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
 Mini:SetScript("OnClick", function() SlashCmdList["SEELENHELFER"]("") end)
 
 -- =========================================================================
+-- CHANGELOG FENSTER (WAS IST NEU)
+-- =========================================================================
+local ChangelogFrame = CreateFrame("Frame", "SeelenHelfer_ChangelogFrame", UIParent, "BackdropTemplate")
+ChangelogFrame:SetSize(400, 300)
+ChangelogFrame:SetPoint("CENTER")
+ChangelogFrame:SetFrameStrata("DIALOG")
+ChangelogFrame:EnableMouse(true)
+ChangelogFrame:SetMovable(true)
+ChangelogFrame:RegisterForDrag("LeftButton")
+ChangelogFrame:SetScript("OnDragStart", function(self) self:StartMoving() end)
+ChangelogFrame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
+ChangelogFrame:Hide()
+
+ChangelogFrame:SetBackdrop({ bgFile = "Interface\\ChatFrame\\ChatFrameBackground", edgeFile = "Interface\\ChatFrame\\ChatFrameBackground", edgeSize = 1 })
+ChangelogFrame:SetBackdropColor(0.05, 0.05, 0.05, 0.95)
+ChangelogFrame:SetBackdropBorderColor(0, 0, 0, 1)
+
+local CL_TitleBar = CreateFrame("Frame", nil, ChangelogFrame)
+CL_TitleBar:SetSize(400, 30)
+CL_TitleBar:SetPoint("TOPLEFT")
+local CL_TitleBarBg = CL_TitleBar:CreateTexture(nil, "BACKGROUND")
+CL_TitleBarBg:SetAllPoints(); CL_TitleBarBg:SetColorTexture(0.1, 0.1, 0.1, 1)
+
+local CL_Title = CL_TitleBar:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+CL_Title:SetPoint("CENTER")
+CL_Title:SetText("|cffffd700Was ist neu in v" .. internalVersion .. "?|r")
+
+local CL_Text = ChangelogFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+CL_Text:SetPoint("TOPLEFT", 20, -50)
+CL_Text:SetPoint("BOTTOMRIGHT", -20, 80)
+CL_Text:SetJustifyH("LEFT")
+CL_Text:SetJustifyV("TOP")
+CL_Text:SetSpacing(8)
+CL_Text:SetText(table.concat(changelogNotes, "\n"))
+
+local CL_Checkbox = CreateFrame("CheckButton", nil, ChangelogFrame, "UICheckButtonTemplate")
+CL_Checkbox:SetPoint("BOTTOMLEFT", 15, 45)
+CL_Checkbox:SetChecked(true)
+local CL_CheckboxLbl = ChangelogFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+CL_CheckboxLbl:SetPoint("LEFT", CL_Checkbox, "RIGHT", 5, 0)
+CL_CheckboxLbl:SetText("Für dieses Update nicht mehr anzeigen")
+
+local CL_CloseBtn = CreateModernButton(ChangelogFrame, "Schließen", 120, 25)
+CL_CloseBtn:SetPoint("BOTTOM", 0, 15)
+CL_CloseBtn:SetScript("OnClick", function()
+    if CL_Checkbox:GetChecked() then
+        SeelenHelferDB.lastSeenVersion = internalVersion
+    end
+    ChangelogFrame:Hide()
+end)
+
+-- =========================================================================
 -- INIT & EVENTS
 -- =========================================================================
-local Init = CreateFrame("Frame"); Init:RegisterEvent("PLAYER_LOGIN")
-Init:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED"); Init:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+local Init = CreateFrame("Frame"); 
+Init:RegisterEvent("PLAYER_LOGIN")
+Init:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+Init:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+Init:RegisterEvent("BAG_UPDATE")
+Init:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
+
 Init:SetScript("OnEvent", function(self, event)
     if event == "PLAYER_LOGIN" then
         SeelenHelferDB = SeelenHelferDB or {}
@@ -530,6 +665,10 @@ Init:SetScript("OnEvent", function(self, event)
         if SeelenHelferDB.autoDetect == nil then SeelenHelferDB.autoDetect = true end
         if SeelenHelferDB.showArchonPercentages == nil then SeelenHelferDB.showArchonPercentages = true end
         if SeelenHelferDB.showStatWeights == nil then SeelenHelferDB.showStatWeights = true end
+        
+        if SeelenHelferDB.showOwnedCheckmark == nil then SeelenHelferDB.showOwnedCheckmark = true end
+        if SeelenHelferDB.hideOwnedItems == nil then SeelenHelferDB.hideOwnedItems = false end
+        
         SeelenHelferDB.uiScale = SeelenHelferDB.uiScale or 1.0
         SeelenHelferDB.defaultContent = SeelenHelferDB.defaultContent or "Raid"
         SeelenHelferDB.minimapPos = tonumber(SeelenHelferDB.minimapPos) or 4.5
@@ -544,11 +683,20 @@ Init:SetScript("OnEvent", function(self, event)
         Mini:ClearAllPoints()
         UpdateMinimapPos(SeelenHelferDB.minimapPos)
         
+        ScanPlayerItems()
+        
+        if SeelenHelferDB.lastSeenVersion ~= internalVersion then
+            ChangelogFrame:Show()
+        end
+        
         print("|cffffd700SeelenHelfer v" .. internalVersion .. "|r erfolgreich geladen. Tippe /sh zum Öffnen.")
     elseif event == "GET_ITEM_INFO_RECEIVED" and MainFrame:IsShown() then
         UpdateList()
     elseif event == "PLAYER_SPECIALIZATION_CHANGED" and MainFrame:IsShown() then
         UpdateList()
+    elseif event == "BAG_UPDATE" or event == "PLAYER_EQUIPMENT_CHANGED" then
+        ScanPlayerItems()
+        if MainFrame:IsShown() then UpdateList() end
     end
 end)
 
@@ -600,6 +748,14 @@ local manualCheck = CreateFrame("CheckButton", nil, OF, "UICheckButtonTemplate")
 local manualLbl = OF:CreateFontString(nil, "OVERLAY", "GameFontNormal"); manualLbl:SetPoint("LEFT", manualCheck, "RIGHT", 5, 0); manualLbl:SetText("Manuelle Fensterhöhe (Ermöglicht Ziehen unten rechts)")
 manualCheck:SetScript("OnClick", function(s) SeelenHelferDB.useManualHeight = s:GetChecked(); TriggerUpdate() end)
 
+local showOwnedCheck = CreateFrame("CheckButton", nil, OF, "UICheckButtonTemplate"); showOwnedCheck:SetPoint("TOPLEFT", 16, -310)
+local showOwnedLbl = OF:CreateFontString(nil, "OVERLAY", "GameFontNormal"); showOwnedLbl:SetPoint("LEFT", showOwnedCheck, "RIGHT", 5, 0); showOwnedLbl:SetText("Grünen Haken anzeigen, wenn sich das Item im Inventar befindet")
+showOwnedCheck:SetScript("OnClick", function(s) SeelenHelferDB.showOwnedCheckmark = s:GetChecked(); TriggerUpdate() end)
+
+local hideOwnedCheck = CreateFrame("CheckButton", nil, OF, "UICheckButtonTemplate"); hideOwnedCheck:SetPoint("TOPLEFT", 16, -350)
+local hideOwnedLbl = OF:CreateFontString(nil, "OVERLAY", "GameFontNormal"); hideOwnedLbl:SetPoint("LEFT", hideOwnedCheck, "RIGHT", 5, 0); hideOwnedLbl:SetText("BIS Items die Ihr Besitzt komplett aus der BiS-Liste ausblenden")
+hideOwnedCheck:SetScript("OnClick", function(s) SeelenHelferDB.hideOwnedItems = s:GetChecked(); TriggerUpdate() end)
+
 if Settings and Settings.RegisterCanvasLayoutCategory then
     local cat = Settings.RegisterCanvasLayoutCategory(OF, "SeelenHelfer"); Settings.RegisterAddOnCategory(cat)
     SeelenHelfer_OptionsCategory = cat.ID
@@ -613,6 +769,8 @@ OF:SetScript("OnShow", function()
     pctCheck:SetChecked(SeelenHelferDB and SeelenHelferDB.showArchonPercentages ~= false)
     statWeightCheck:SetChecked(SeelenHelferDB and SeelenHelferDB.showStatWeights ~= false)
     manualCheck:SetChecked(SeelenHelferDB and SeelenHelferDB.useManualHeight == true) 
+    showOwnedCheck:SetChecked(SeelenHelferDB and SeelenHelferDB.showOwnedCheckmark ~= false)
+    hideOwnedCheck:SetChecked(SeelenHelferDB and SeelenHelferDB.hideOwnedItems == true)
 end)
 
 -- =========================================================================
