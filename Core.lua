@@ -19,6 +19,7 @@ local SeelenHelfer_ChampionItems = {
 local selectedContent = "Raid"   
 local selectedTab = "Gear"
 
+local UpdateList
 local TriggerUpdate
 
 -- =========================================================================
@@ -265,7 +266,7 @@ StaticPopupDialogs["SEELENHELFER_COPY_TALENTS"] = {
 -- =========================================================================
 -- UPDATE LISTE (RENDERING)
 -- =========================================================================
-function UpdateList()
+UpdateList = function()
     btnRaid:SetBackdropColor(selectedContent == "Raid" and 0.4 or 0.2, selectedContent == "Raid" and 0.4 or 0.2, selectedContent == "Raid" and 0.4 or 0.2, 1)
     btnMythic:SetBackdropColor(selectedContent == "Mythic+" and 0.4 or 0.2, selectedContent == "Mythic+" and 0.4 or 0.2, selectedContent == "Mythic+" and 0.4 or 0.2, 1)
     btnTabGear:SetBackdropColor(selectedTab == "Gear" and 0.5 or 0.2, selectedTab == "Gear" and 0.5 or 0.2, selectedTab == "Gear" and 0.5 or 0.2, 1)
@@ -390,9 +391,6 @@ function UpdateList()
                     local t1 = line:CreateFontString(nil, "OVERLAY", "GameFontNormal"); t1:SetPoint("TOPLEFT", icon, "TOPRIGHT", 10, -2); t1:SetText("|cffffffff" .. itemData.name .. "|r |cff888888-|r |cffffd700" .. itemData.heroTalent .. "|r")
                     local t2 = line:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"); t2:SetPoint("BOTTOMLEFT", icon, "BOTTOMRIGHT", 10, 2); t2:SetText("Nutzung: |cff00ff00" .. itemData.usage .. "|r  |cff888888-|r  DPS: |cffffffff" .. itemData.dps .. "|r")
                     
-                    -- =========================================================================
-                    -- FIX: KORREKTE LINK-FORMATIERUNG FÜR TALENT-VORSCHAU
-                    -- =========================================================================
                     line:SetScript("OnClick", function(_, btn)
                         local clean = string.gsub(itemData.importString, "%s+", "")
                         if btn == "RightButton" then 
@@ -436,7 +434,7 @@ end
 TriggerUpdate = function() if MainFrame:IsShown() then UpdateList() end end
 
 -- =========================================================================
--- TOOLTIP & OVERLAYS
+-- TOOLTIP & OVERLAYS (Taint-Sicher mit Weak Tables!)
 -- =========================================================================
 if TooltipDataProcessor then
     TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(t, d)
@@ -444,10 +442,17 @@ if TooltipDataProcessor then
     end)
 end
 
+local BagOverlays = setmetatable({}, {__mode = "k"})
+
 local function UpdOvl(b, i)
     if not b then return end
-    if not b.SH_Ovl then b.SH_Ovl = b:CreateTexture(nil, "OVERLAY"); b.SH_Ovl:SetSize(14, 14); b.SH_Ovl:SetPoint("TOPRIGHT", 2, 2); b.SH_Ovl:SetTexture("Interface\\AddOns\\SeelenHelfer\\bis") end
-    b.SH_Ovl:SetShown(i and IsItemBiS(i))
+    if not BagOverlays[b] then 
+        BagOverlays[b] = b:CreateTexture(nil, "OVERLAY")
+        BagOverlays[b]:SetSize(14, 14)
+        BagOverlays[b]:SetPoint("TOPRIGHT", 2, 2)
+        BagOverlays[b]:SetTexture("Interface\\AddOns\\SeelenHelfer\\bis") 
+    end
+    BagOverlays[b]:SetShown(i and IsItemBiS(i))
 end
 
 if ContainerFrameItemButtonMixin and ContainerFrameItemButtonMixin.UpdateItem then
@@ -464,7 +469,7 @@ end
 -- MINIMAP SETUP & FUNKTION (Perfekte Zentrierung & Viereck Support)
 -- =========================================================================
 local Mini = CreateFrame("Button", "SeelenHelfer_Mini", Minimap)
-Mini:SetSize(32, 32) -- Standard Blizzard-Größe für Minimap-Buttons
+Mini:SetSize(32, 32)
 Mini:SetFrameStrata("MEDIUM")
 Mini:SetFrameLevel(8)
 Mini:EnableMouse(true)
@@ -473,8 +478,6 @@ Mini:RegisterForDrag("LeftButton")
 Mini.icon = Mini:CreateTexture(nil, "BACKGROUND")
 Mini.icon:SetTexture("Interface\\AddOns\\SeelenHelfer\\logo")
 Mini.icon:SetSize(20, 20)
--- FIX: Da Blizzards Ring-Textur asymmetrisch ist, setzen wir das Icon
--- nicht auf CENTER, sondern verschieben es exakt in die Lücke (7px rechts, 6px runter).
 Mini.icon:SetPoint("TOPLEFT", Mini, "TOPLEFT", 7, -6)
 
 Mini.border = Mini:CreateTexture(nil, "OVERLAY")
@@ -484,30 +487,18 @@ Mini.border:SetPoint("TOPLEFT", Mini, "TOPLEFT", 0, 0)
 
 local function UpdateMinimapPos(angle) 
     if not angle then return end
-    
-    -- Größe dynamisch auslesen (Halbe Breite + 5 Pixel Abstand)
     local radius = (Minimap:GetWidth() / 2) + 5 
-    
-    -- Automatische Erkennung für eckige Minimaps (z.B. ElvUI)
     local isSquare = false 
-    if GetMinimapShape and GetMinimapShape() == "SQUARE" then
-        isSquare = true
-    end
-    if ElvUI or Tukui then 
-        isSquare = true 
-    end
+    if GetMinimapShape and GetMinimapShape() == "SQUARE" then isSquare = true end
+    if ElvUI or Tukui then isSquare = true end
 
-    -- Koordinaten berechnen
     local x = math.cos(angle)
     local y = math.sin(angle)
     
-    -- Geometrie-Trick: Zwinge den Punkt auf ein Viereck, wenn nötig
     if isSquare then
         local q = math.max(math.abs(x), math.abs(y))
-        x = x / q
-        y = y / q
+        x = x / q; y = y / q
     end
-    
     Mini:SetPoint("CENTER", Minimap, "CENTER", x * radius, y * radius) 
 end
 
@@ -517,20 +508,14 @@ Mini:SetScript("OnDragStart", function(self)
         local cx, cy = GetCursorPosition()
         local sc = Minimap:GetEffectiveScale()
         if not mx or not my or not cx or not cy or not sc then return end
-        
         local angle = math.atan2((cy/sc) - my, (cx/sc) - mx)
         SeelenHelferDB.minimapPos = angle
         UpdateMinimapPos(angle) 
     end) 
 end)
+Mini:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
+Mini:SetScript("OnClick", function() SlashCmdList["SEELENHELFER"]("") end)
 
-Mini:SetScript("OnDragStop", function(self) 
-    self:SetScript("OnUpdate", nil) 
-end)
-
-Mini:SetScript("OnClick", function() 
-    SlashCmdList["SEELENHELFER"]("") 
-end)
 -- =========================================================================
 -- INIT & EVENTS
 -- =========================================================================
@@ -542,13 +527,12 @@ Init:SetScript("OnEvent", function(self, event)
         
         if SeelenHelferDB.useManualHeight == nil then SeelenHelferDB.useManualHeight = true end
         if SeelenHelferDB.customHeight == nil then SeelenHelferDB.customHeight = 550 end
-        
         if SeelenHelferDB.autoDetect == nil then SeelenHelferDB.autoDetect = true end
         if SeelenHelferDB.showArchonPercentages == nil then SeelenHelferDB.showArchonPercentages = true end
         if SeelenHelferDB.showStatWeights == nil then SeelenHelferDB.showStatWeights = true end
         SeelenHelferDB.uiScale = SeelenHelferDB.uiScale or 1.0
         SeelenHelferDB.defaultContent = SeelenHelferDB.defaultContent or "Raid"
-        SeelenHelferDB.minimapPos = SeelenHelferDB.minimapPos or 4.5
+        SeelenHelferDB.minimapPos = tonumber(SeelenHelferDB.minimapPos) or 4.5
         
         local _, _, cID = UnitClass("player")
         SeelenHelferDB.manualClassID = SeelenHelferDB.manualClassID or cID
@@ -556,6 +540,8 @@ Init:SetScript("OnEvent", function(self, event)
         
         MainFrame:SetScale(SeelenHelferDB.uiScale)
         selectedContent = SeelenHelferDB.defaultContent
+        
+        Mini:ClearAllPoints()
         UpdateMinimapPos(SeelenHelferDB.minimapPos)
         
         print("|cffffd700SeelenHelfer v" .. internalVersion .. "|r erfolgreich geladen. Tippe /sh zum Öffnen.")
@@ -630,8 +616,10 @@ OF:SetScript("OnShow", function()
 end)
 
 -- =========================================================================
--- WÜRFELFENSTER (Bedarf/Gier) OVERLAY
+-- WÜRFELFENSTER (Bedarf/Gier) OVERLAY (Taint-Sicher!)
 -- =========================================================================
+local LootOverlays = setmetatable({}, {__mode = "k"})
+
 local numLootFrames = NUM_GROUP_LOOT_FRAMES or 4
 for i = 1, numLootFrames do
     local frame = _G["GroupLootFrame" .. i]
@@ -643,17 +631,17 @@ for i = 1, numLootFrames do
                     local itemLink = GetLootRollItemLink(rollID)
                     local itemID = itemLink and tonumber(string.match(itemLink, "item:(%d+)"))
                     
-                    if not self.SeelenHelferOverlay then
-                        self.SeelenHelferOverlay = self.IconFrame:CreateTexture(nil, "OVERLAY", nil, 7)
-                        self.SeelenHelferOverlay:SetSize(20, 20)
-                        self.SeelenHelferOverlay:SetPoint("TOPRIGHT", self.IconFrame, "TOPRIGHT", 5, 5)
-                        self.SeelenHelferOverlay:SetTexture("Interface\\AddOns\\SeelenHelfer\\bis")
+                    if not LootOverlays[self] then
+                        LootOverlays[self] = self.IconFrame:CreateTexture(nil, "OVERLAY", nil, 7)
+                        LootOverlays[self]:SetSize(20, 20)
+                        LootOverlays[self]:SetPoint("TOPRIGHT", self.IconFrame, "TOPRIGHT", 5, 5)
+                        LootOverlays[self]:SetTexture("Interface\\AddOns\\SeelenHelfer\\bis")
                     end
                     
                     if itemID and IsItemBiS(itemID) then
-                        self.SeelenHelferOverlay:Show()
+                        LootOverlays[self]:Show()
                     else
-                        self.SeelenHelferOverlay:Hide()
+                        LootOverlays[self]:Hide()
                     end
                 end
             end)
@@ -662,8 +650,10 @@ for i = 1, numLootFrames do
 end
 
 -- =========================================================================
--- GROßE SCHATZKAMMER (Great Vault) OVERLAY
+-- GROßE SCHATZKAMMER (Great Vault) OVERLAY (Taint-Sicher!)
 -- =========================================================================
+local VaultOverlays = setmetatable({}, {__mode = "k"})
+
 local function StartVaultScanner()
     if not WeeklyRewardsFrame then return end
     if not SeelenHelfer_VaultTicker then
@@ -683,17 +673,17 @@ local function StartVaultScanner()
                     
                     if itemID then
                         local isBis = IsItemBiS(tonumber(itemID))
-                        if not itemFrame.SeelenHelferOverlayFrame then
-                            itemFrame.SeelenHelferOverlayFrame = CreateFrame("Frame", nil, itemFrame)
-                            itemFrame.SeelenHelferOverlayFrame:SetSize(22, 22)
-                            itemFrame.SeelenHelferOverlayFrame:SetPoint("TOPRIGHT", itemFrame, "TOPRIGHT", -2, -2)
-                            itemFrame.SeelenHelferOverlayFrame:SetFrameStrata("DIALOG") 
-                            itemFrame.SeelenHelferOverlayFrame:SetFrameLevel(99)
-                            local tex = itemFrame.SeelenHelferOverlayFrame:CreateTexture(nil, "OVERLAY")
+                        if not VaultOverlays[itemFrame] then
+                            local ovl = CreateFrame("Frame", nil, itemFrame)
+                            ovl:SetSize(22, 22)
+                            ovl:SetPoint("TOPRIGHT", itemFrame, "TOPRIGHT", -2, -2)
+                            ovl:SetFrameStrata("DIALOG") 
+                            ovl:SetFrameLevel(99)
+                            local tex = ovl:CreateTexture(nil, "OVERLAY")
                             tex:SetAllPoints(); tex:SetTexture("Interface\\AddOns\\SeelenHelfer\\bis")
-                            itemFrame.SeelenHelferOverlayFrame.tex = tex
+                            VaultOverlays[itemFrame] = ovl
                         end
-                        if isBis then itemFrame.SeelenHelferOverlayFrame:Show() else itemFrame.SeelenHelferOverlayFrame:Hide() end
+                        if isBis then VaultOverlays[itemFrame]:Show() else VaultOverlays[itemFrame]:Hide() end
                     end
                 end
             end
