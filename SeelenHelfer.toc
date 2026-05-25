@@ -1,0 +1,11 @@
+## Interface: 120001, 120005
+## Title: SeelenHelfer
+## Notes: Zeigt BiS Listen für Raid und M+ (Quelle: Archon/Wowhead)
+## Author: GeminiAI
+## Version: 1.0
+## SavedVariables: SeelenHelferDB
+
+ArchonData.lua
+ArchonTalents.lua
+ArchonEnchantsGems.lua
+Core.lua
