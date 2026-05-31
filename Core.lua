@@ -43,21 +43,21 @@ local GetBagItemID = C_Container and C_Container.GetContainerItemID or GetContai
 local function ScanPlayerItems()
     wipe(OwnedItemsCache)
     
-    -- 1. Angelegte Ausrüstung scannen (Slots 1 bis 19)
-    for i = 1, 19 do
-        local itemID = GetInventoryItemID("player", i)
-        if itemID then OwnedItemsCache[itemID] = true end
-    end
-    
-    -- 2. Taschen scannen (Rucksäcke 0 bis 4)
+    -- 1. Taschen scannen (Rucksäcke 0 bis 4)
     for bag = 0, 4 do
         local numSlots = GetBagSlots(bag)
         if numSlots then
             for slot = 1, numSlots do
                 local itemID = GetBagItemID(bag, slot)
-                if itemID then OwnedItemsCache[itemID] = true end
+                if itemID then OwnedItemsCache[itemID] = "bag" end
             end
         end
+    end
+    
+    -- 2. Angelegte Ausrüstung scannen (Slots 1 bis 19)
+    for i = 1, 19 do
+        local itemID = GetInventoryItemID("player", i)
+        if itemID then OwnedItemsCache[itemID] = "equipped" end
     end
 end
 
@@ -307,6 +307,77 @@ StaticPopupDialogs["SEELENHELFER_COPY_TALENTS"] = {
     EditBoxOnEscapePressed = function(self) self:GetParent():Hide() end,
     timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
 }
+-- =========================================================================
+-- KONFETTI & FANFARE (Wenn alles gefarmt wurde!)
+-- =========================================================================
+local ConfettiFrame = CreateFrame("Frame", nil, UIParent)
+ConfettiFrame:SetAllPoints()
+ConfettiFrame:SetFrameStrata("FULLSCREEN_DIALOG")
+ConfettiFrame:Hide()
+
+local particles = {}
+local colors = {
+    {1, 0, 0}, {0, 1, 0}, {0, 0.5, 1}, {1, 1, 0}, {1, 0, 1}, {0, 1, 1}, {1, 1, 1}, {1, 0.5, 0}
+}
+
+function SeelenHelfer_FireConfetti()
+    if ConfettiFrame:IsShown() then return end
+    ConfettiFrame:Show()
+    
+    -- Epischer Sound (Legendary Loot Toast)
+    PlaySound(118933, "Master") 
+    
+    -- MEHR Konfetti: 250 statt 80 Schnipsel!
+    local numParticles = 300
+    
+    for i = 1, numParticles do
+        local p = particles[i]
+        if not p then
+            p = ConfettiFrame:CreateTexture(nil, "OVERLAY")
+            p:SetTexture("Interface\\ChatFrame\\ChatFrameBackground")
+            p:SetSize(math.random(6, 12), math.random(6, 12))
+            particles[i] = p
+        end
+        local c = colors[math.random(#colors)]
+        p:SetVertexColor(c[1], c[2], c[3], 1)
+        p:ClearAllPoints()
+        p.x = math.random(0, GetScreenWidth())
+        -- Startet viel höher über dem Bildschirmrand (bis zu 1000px), 
+        -- damit es über mehrere Sekunden hinweg immer weiter nachrieselt
+        p.y = GetScreenHeight() + math.random(10, 1000) 
+        -- Fällt minimal langsamer für einen schöneren Schwebe-Effekt
+        p.speed = math.random(100, 350) 
+        p.swaySpeed = math.random(1, 4)
+        p.swayWidth = math.random(20, 80)
+        p.swayOffset = math.random() * math.pi * 2
+        p:SetPoint("CENTER", UIParent, "BOTTOMLEFT", p.x, p.y)
+        p:SetAlpha(1)
+        p:Show()
+    end
+
+    local timer = 0
+    local duration = 8 -- LÄNGER: 8 Sekunden statt 4 Sekunden Party!
+
+    ConfettiFrame:SetScript("OnUpdate", function(self, elapsed)
+        timer = timer + elapsed
+        if timer > duration then
+            self:Hide()
+            self:SetScript("OnUpdate", nil)
+            return
+        end
+        for i = 1, numParticles do
+            local p = particles[i]
+            p.y = p.y - (p.speed * elapsed)
+            local currentX = p.x + math.sin(timer * p.swaySpeed + p.swayOffset) * p.swayWidth
+            p:SetPoint("CENTER", UIParent, "BOTTOMLEFT", currentX, p.y)
+            
+            -- Sanftes Ausblenden in der letzten Sekunde (Sekunde 7 bis 8)
+            if timer > (duration - 1) then 
+                p:SetAlpha(1 - (timer - (duration - 1))) 
+            end
+        end
+    end)
+end
 
 -- =========================================================================
 -- UPDATE LISTE (RENDERING)
@@ -344,13 +415,35 @@ UpdateList = function()
     local rawDataList = GetCurrentDataList()
     local dataList = {}
     
-    -- Filter Logik: Besessene Items verstecken
+    -- NEU: Wir gehen erstmal davon aus, dass wir alles haben (wenn es überhaupt Daten gibt)
+    local allOwned = (selectedTab == "Gear" and #rawDataList > 0)
+    
+    -- Filter Logik: Besessene Items verstecken & Prüfen ob alle besessen sind
     for _, itemData in ipairs(rawDataList) do
         local iID = tonumber(itemData.id)
         local isOwned = iID and OwnedItemsCache[iID]
+        
+        -- Wenn auch nur ein Item fehlt, haben wir noch nicht alle
+        if selectedTab == "Gear" and not isOwned then
+            allOwned = false
+        end
+        
         if not (selectedTab == "Gear" and isOwned and SeelenHelferDB.hideOwnedItems) then
             table.insert(dataList, itemData)
         end
+    end
+    
+    -- =========================================================================
+    -- PARTY AUSLÖSEN (Unabhängig vom Ausblenden der Items!)
+    -- =========================================================================
+    if allOwned then
+        local celebKey = tostring(cID) .. "-" .. tostring(sID) .. "-" .. tostring(selectedContent)
+        if MainFrame.lastCelebratedKey ~= celebKey then
+            MainFrame.lastCelebratedKey = celebKey
+            SeelenHelfer_FireConfetti()
+        end
+    else
+        MainFrame.lastCelebratedKey = nil -- Reset der Party, wenn wieder Items fehlen
     end
     
     if selectedTab == "Gear" then
@@ -386,7 +479,10 @@ UpdateList = function()
     if #dataList == 0 then
         local msg = ContentFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         msg:SetPoint("TOP", ContentFrame, "TOP", 0, -20)
-        if selectedTab == "Gear" and #rawDataList > 0 and SeelenHelferDB.hideOwnedItems then
+        
+        -- Glückwunschtext zeigen wir weiterhin nur, wenn die Items ausgeblendet sind, 
+        -- weil sonst ohnehin alle Items als Liste mit Haken angezeigt werden.
+        if allOwned and SeelenHelferDB.hideOwnedItems then
             msg:SetText("|cff00ff00Herzlichen Glückwunsch! Du hast bereits alle BiS-Items!|r\n")
         else
             msg:SetText("Noch keine Daten für diesen Bereich vorhanden.\n")
@@ -394,6 +490,7 @@ UpdateList = function()
         msg:Show(); table.insert(ContentFrame.lines, msg)
         yO = -100
     else
+	
         for i, itemData in ipairs(dataList) do
             if itemData.isHeader then
                 local h = CreateFrame("Frame", nil, ContentFrame)
@@ -427,14 +524,24 @@ UpdateList = function()
                     
                     local icon = line:CreateTexture(nil, "ARTWORK"); icon:SetSize(34, 34); icon:SetPoint("LEFT", 5, 0); icon:SetTexture(iT or 134400)
                     
-                    -- BiS Star & Checkmark
-                    if selectedTab == "Gear" then                        
-                        
+					-- BiS Star & Checkmark (Mit Taschen-Unterscheidung)
+                    if selectedTab == "Gear" then
                         if iID and OwnedItemsCache[iID] and SeelenHelferDB.showOwnedCheckmark then
-                            local check = line:CreateTexture(nil, "OVERLAY")
-                            check:SetSize(22, 22)
-                            check:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 6, -6)
-                            check:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+                            local statusIcon = line:CreateTexture(nil, "OVERLAY")
+                            
+                            if OwnedItemsCache[iID] == "equipped" then
+                                -- Item ist angelegt -> Grüner Haken
+                                statusIcon:SetSize(22, 22)
+                                statusIcon:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 6, -6)
+                                statusIcon:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+                                statusIcon:SetTexCoord(0, 1, 0, 1) -- Standard Koordinaten
+                            elseif OwnedItemsCache[iID] == "bag" then
+                                -- Item liegt in der Tasche -> Taschen-Icon
+                                statusIcon:SetSize(16, 16)
+                                statusIcon:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 4, -4)
+                                statusIcon:SetTexture("Interface\\AddOns\\SeelenHelfer\\tasche") -- Klassisches WoW Taschen-Icon
+                                statusIcon:SetTexCoord(0.1, 0.9, 0.1, 0.9) -- Schneidet den grauen Rand vom Icon sauber ab
+                            end
                         end
                     end
                     
